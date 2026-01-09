@@ -1,7 +1,7 @@
 # Vortex-MacroPad
 A code for my MacroPad
 
-# i still have to buy a components to assemble it
+# i still have to buy a components to assemble it (already ordered)
 Wiring Note:
 | XIAO RP2040 Pin | Connected Device | Signal / Function        |
 |-----------------|------------------|--------------------------|
