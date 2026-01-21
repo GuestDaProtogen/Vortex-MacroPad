@@ -9,6 +9,9 @@
 #define GIF_H 32
 #define GIF_FRAMES 12
 
+float currentCursorY = 20;
+int targetCursorY = 20;
+
 // 'F18', 32x32px
 const unsigned char epd_bitmap_F18 [] PROGMEM = {
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
@@ -990,12 +993,13 @@ void drawHome() {
   }
 }
 
+float smoothMenuY = 26.0; // Starting position for the settings cursor
+
 void drawSettings() {
   u8g2.setFont(u8g2_font_profont12_tf);
   
-  // Logo Top Left
+  // 1. Draw your original Header and Logo [cite: 480, 503]
   drawBitmap(0, 0, epd_bitmap_vortex_no_text); 
-  
   u8g2.setCursor(30, 15); 
   u8g2.print("SETTINGS");
   u8g2.drawHLine(0, 22, 128);
@@ -1003,14 +1007,45 @@ void drawSettings() {
   int yStart = 35;
   const char* items[] = {"Remap Buttons", "RGB Settings", "Brightness"};
   
+  // 2. Draw all menu text first 
+  u8g2.setDrawColor(1);
   for(int i=0; i<3; i++) {
-    if (i == menuIndex) {
-      u8g2.drawBox(0, yStart + (i*12) - 9, 100, 11);
-      u8g2.setDrawColor(0);
-    }
     u8g2.setCursor(5, yStart + (i*12));
     u8g2.print(items[i]);
-    u8g2.setDrawColor(1);
+  }
+
+  // 3. Animation Logic: Move smoothMenuY toward the target index 
+  float targetY = yStart + (menuIndex * 12) - 9;
+  // This line creates the "smooth" slide (adjust 0.2 for speed)
+  smoothMenuY += (targetY - smoothMenuY) * 0.2; 
+
+  // 4. Draw the sliding box using XOR mode (Draw Color 2)
+  // This automatically makes text black when the box is over it
+  u8g2.setDrawColor(2); 
+  u8g2.drawBox(0, (int)smoothMenuY, 100, 11);
+  u8g2.setDrawColor(1); // Reset to default
+}
+
+bool mirroringMode = false;
+
+void handleMirroring() {
+  if (Serial.available() > 0) {
+    // Look for a start byte (e.g., 0x02 for 'Start of Text')
+    if (Serial.read() == 0x02) {
+      mirroringMode = true;
+      uint8_t buffer[1024]; // Adjust based on your screen size (128x64 / 8 = 1024 bytes)
+      Serial.readBytes(buffer, 1024);
+      
+      u8g2.clearBuffer();
+      u8g2.drawBitmap(0, 0, 16, 64, buffer); // 16 bytes wide = 128 pixels
+      u8g2.sendBuffer();
+    }
+  }
+  
+  // Exit mirroring if the encoder is clicked
+  if (encClick) {
+    mirroringMode = false;
+    encClick = false;
   }
 }
 
@@ -1133,12 +1168,45 @@ void setup() {
   u8g2.begin();
 }
 
+unsigned long lastMirrorFrame = 0; // Track when we last got a frame
+const int mirrorTimeout = 500;    // How long to stay in mirror mode (ms)
+
 void loop() {
-  readInputs();
+// Check for the start of a frame
+  if (Serial.available() > 0) {
+    if (Serial.read() == 0x02) { 
+      uint8_t buffer[1024];
+      
+      // Give the serial port 50ms to finish receiving the image
+      Serial.setTimeout(50); 
+      size_t readCount = Serial.readBytes(buffer, 1024);
+      
+      // Only draw and ACK if we got the WHOLE image
+      if (readCount == 1024) {
+        u8g2.clearBuffer();
+        u8g2.drawBitmap(0, 0, 16, 64, buffer); 
+        u8g2.sendBuffer();
+        
+        // Tell Python we are ready for the next one
+        Serial.write(0x06); 
+        lastMirrorFrame = millis();
+      } else {
+        // We got a partial frame, tell Python to try again anyway
+        // This prevents the script from hanging forever
+        Serial.write(0x06); 
+      }
+      return; 
+    }
+  }
+    readInputs();
   handleStateMachine();
   updateRGB(); 
   updateStatusLED();
   updateHID();
+  if (millis() - lastMirrorFrame < 500) {
+    return;
+  }
+
 
   if (uiState == UI_SPLASH) {
     drawSplash();
