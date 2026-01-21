@@ -453,10 +453,13 @@ uint8_t keyTimeIdx = 0;
 
 struct Trail {
   bool active;
-  int x, y, h;
-  int btnIndex;
-  bool held;
+  int x;
+  int y;
+  int h;        // Height of the trail
+  int btnIndex; // The button this trail belongs to
+  bool held;    // Whether the button is still being held
 };
+
 Trail trails[MAX_TRAILS];
 
 struct ButtonState {
@@ -752,6 +755,8 @@ void readInputs() {
       keyTimes[keyTimeIdx++ % 32] = millis();
       for(int t=0; t<MAX_TRAILS; t++) {
         if(!trails[t].active) {
+          // {active, x, y, h, btnIndex, held}
+          // Start at y=46 with height h=2
           trails[t] = {true, 48 + (i*20), 46, 2, i, true};
           break;
         }
@@ -945,18 +950,22 @@ void drawDetailPanel() {
 void drawTrails() {
   for(int i=0; i<MAX_TRAILS; i++) {
     if (!trails[i].active) continue;
+    
     u8g2.drawBox(trails[i].x, trails[i].y, 16, trails[i].h);
     
     if (!trails[i].held) {
-      trails[i].y -= 2; 
+      // Falling/Floating away logic
+      trails[i].y -= 3; // Speed it up slightly
       if (trails[i].y + trails[i].h < 0) trails[i].active = false;
     } else {
+      // Check if button was released
       if (!btnState[trails[i].btnIndex].pressed) {
         trails[i].held = false;
       } else {
-        if (trails[i].h < 30) {
-             trails[i].h += 1;
-             trails[i].y -= 1;
+        // Grow logic while held
+        if (trails[i].h < 40) { // Increased max height to 40
+             trails[i].h += 3; // Grow 3x faster than before
+             trails[i].y -= 3; // Move top up to match growth
         }
       }
     }
