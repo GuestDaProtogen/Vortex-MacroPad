@@ -9,6 +9,9 @@
 // Report ID 1 = Keyboard
 // Report ID 2 = Consumer (Media)
 
+uint8_t kb_report[8] = {0}; // modifier, reserved, 6 keys
+
+
 uint8_t const hid_report_descriptor[] = {
   TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(1)),
   TUD_HID_REPORT_DESC_CONSUMER(HID_REPORT_ID(2))
@@ -25,13 +28,48 @@ Adafruit_USBD_HID usb_hid(
 bool hidEnabled = true;
 
 // ======================================================
+// ================== KEYBOARD REPORT ===================
+// ======================================================
+
+
+bool addKey(uint8_t key){
+  for (int i = 2; i < 8; i++)
+    if (kb_report[i] == key) return false;
+
+  for (int i = 2; i < 8; i++){
+    if (kb_report[i] == 0){
+      kb_report[i] = key;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool removeKey(uint8_t key){
+  bool removed = false;
+  for (int i = 2; i < 8; i++){
+    if (kb_report[i] == key){
+      kb_report[i] = 0;
+      removed = true;
+    }
+  }
+  return removed;
+}
+
+void sendKeyboard(){
+  usb_hid.sendReport(1, kb_report, sizeof(kb_report));
+}
+
+// ======================================================
 // ======================= OLED =========================
 // ======================================================
+
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
 // ======================================================
 // ======================== PINS ========================
 // ======================================================
+
 const int BTN_PINS[4] = { D7, D8, D9, D10 };
 const int ENC_A  = D1;
 const int ENC_B  = D0;
@@ -40,6 +78,7 @@ const int ENC_SW = D2;
 // ======================================================
 // ======================== LOGO ========================
 // ======================================================
+
 const unsigned char epd_bitmap_vortex_no_text [] PROGMEM = {
   0xf0,0x00,0x00,0xe0,0x00,0x00,0xe0,0x00,0x00,0x1d,0x80,0x00,
   0x1d,0x80,0x00,0x1d,0xbe,0x60,0x01,0xbe,0xa0,0x01,0xbd,0x00,
@@ -54,6 +93,7 @@ const unsigned char epd_bitmap_vortex_no_text [] PROGMEM = {
 // ======================================================
 // ================= BITMAP UTILS =======================
 // ======================================================
+
 static inline uint8_t bitrev(uint8_t b){
   b = (b >> 4) | (b << 4);
   b = ((b & 0xCC) >> 2) | ((b & 0x33) << 2);
@@ -73,6 +113,7 @@ void drawMSBBitmap(int x,int y,uint8_t w,uint8_t h,const uint8_t* src){
 // ======================================================
 // ======================= UI ===========================
 // ======================================================
+
 enum UiState { UI_SPLASH, UI_HOME };
 UiState uiState = UI_SPLASH;
 
@@ -92,31 +133,9 @@ void drawSplash(){
 }
 
 // ======================================================
-// ===================== HID HELPERS ====================
-// ======================================================
-void sendKey(uint8_t keycode){
-  uint8_t report[8] = {0};
-  report[2] = keycode;
-  usb_hid.sendReport(1, report, sizeof(report));
-}
-
-void releaseKey(){
-  uint8_t report[8] = {0};
-  usb_hid.sendReport(1, report, sizeof(report));
-}
-
-void sendConsumer(uint16_t usage){
-  usb_hid.sendReport(2, &usage, sizeof(usage));
-}
-
-void releaseConsumer(){
-  uint16_t empty = 0;
-  usb_hid.sendReport(2, &empty, sizeof(empty));
-}
-
-// ======================================================
 // ===================== BUTTONS ========================
 // ======================================================
+
 struct ButtonState { bool pressed; };
 ButtonState buttons[4];
 
@@ -131,6 +150,7 @@ uint8_t keycodes[4] = {
 // ======================================================
 // ====================== TRAILS ========================
 // ======================================================
+
 #define MAX_TRAILS 24
 struct Trail {
   bool active;
@@ -141,9 +161,9 @@ struct Trail {
 Trail trails[MAX_TRAILS];
 
 void spawnTrail(uint8_t btn){
-  for (int i=0;i<MAX_TRAILS;i++){
+  for (int i = 0; i < MAX_TRAILS; i++){
     if (!trails[i].active){
-      trails[i] = {true, btn, 48 + btn*20, 48, 4, true};
+      trails[i] = {true, btn, 48 + btn * 20, 48, 4, true};
       return;
     }
   }
@@ -152,13 +172,14 @@ void spawnTrail(uint8_t btn){
 // ======================================================
 // ======================== KPS =========================
 // ======================================================
+
 unsigned long keyTimes[32];
 uint8_t keyIndex = 0;
 
 float getKPS(){
   unsigned long now = millis();
   int c = 0;
-  for (int i=0;i<32;i++)
+  for (int i = 0; i < 32; i++)
     if (now - keyTimes[i] <= 1000) c++;
   return c;
 }
@@ -166,6 +187,7 @@ float getKPS(){
 // ======================================================
 // ===================== ENCODER ========================
 // ======================================================
+
 volatile int encoderPos = 0;
 volatile uint8_t lastEncState = 0;
 int lastReportedPos = 0;
@@ -175,54 +197,67 @@ unsigned long encIconTimer = 0;
 bool encPressed = false;
 
 void encoderISR(){
-  uint8_t state = (digitalRead(ENC_A)<<1) | digitalRead(ENC_B);
+  uint8_t state = (digitalRead(ENC_A) << 1) | digitalRead(ENC_B);
   static const int8_t table[16] = {
      0,-1, 1, 0,
      1, 0, 0,-1,
     -1, 0, 0, 1,
      0, 1,-1, 0
   };
-  encoderPos -= table[(lastEncState<<2)|state];
+  encoderPos -= table[(lastEncState << 2) | state];
   lastEncState = state;
 }
 
 // ======================================================
 // ====================== INPUT =========================
 // ======================================================
-void scanButtons(){
-  for (int i=0;i<4;i++){
-    bool now = !digitalRead(BTN_PINS[i]);
 
-    if (now && !buttons[i].pressed){
+void scanButtons(){
+  // clear key slots
+  for (int i = 2; i < 8; i++) kb_report[i] = 0;
+
+  int slot = 2;
+
+  for (int i = 0; i < 4; i++){
+    bool pressed = !digitalRead(BTN_PINS[i]);
+
+    // KPS + trail only on NEW press
+    if (pressed && !buttons[i].pressed){
       keyTimes[keyIndex++ % 32] = millis();
       spawnTrail(i);
-      if (hidEnabled) sendKey(keycodes[i]);
     }
 
-    if (!now && buttons[i].pressed){
-      if (hidEnabled) releaseKey();
-      for (int t=MAX_TRAILS-1;t>=0;t--){
-        if (trails[t].active && trails[t].btn==i && trails[t].held){
-          trails[t].held=false;
+    // If held → add to report
+    if (pressed && slot < 8){
+      kb_report[slot++] = keycodes[i];
+    }
+
+    // Release trail
+    if (!pressed && buttons[i].pressed){
+      for (int t = MAX_TRAILS - 1; t >= 0; t--){
+        if (trails[t].active && trails[t].btn == i && trails[t].held){
+          trails[t].held = false;
           break;
         }
       }
     }
 
-    buttons[i].pressed = now;
+    buttons[i].pressed = pressed;
   }
+
+  // SEND EVERY FRAME
+  usb_hid.sendReport(1, kb_report, sizeof(kb_report));
 }
+
 
 void scanEncoderButton(){
   bool now = !digitalRead(ENC_SW);
 
-  if (now && !encPressed){
-    sendConsumer(HID_USAGE_CONSUMER_PLAY_PAUSE);
-  }
+  if (now && !encPressed)
+    usb_hid.sendReport(2, (uint16_t[]){HID_USAGE_CONSUMER_PLAY_PAUSE}, 2);
 
-  if (!now && encPressed){
-    releaseConsumer();
-  }
+  if (!now && encPressed)
+    usb_hid.sendReport(2, (uint16_t[]){0}, 2);
 
   encPressed = now;
 }
@@ -238,22 +273,24 @@ void readEncoderUI(){
       uint16_t usage = encDir > 0
         ? HID_USAGE_CONSUMER_VOLUME_INCREMENT
         : HID_USAGE_CONSUMER_VOLUME_DECREMENT;
-      sendConsumer(usage);
+      usb_hid.sendReport(2, &usage, 2);
       delay(5);
-      releaseConsumer();
+      uint16_t zero = 0;
+      usb_hid.sendReport(2, &zero, 2);
     }
   }
 }
 
 void updateTrails(){
-  for (int i=0;i<MAX_TRAILS;i++){
+  for (int i = 0; i < MAX_TRAILS; i++){
     if (!trails[i].active) continue;
+
     if (trails[i].held){
       if (trails[i].height < 48) trails[i].height += 2;
     } else {
       trails[i].y -= 3;
       if (trails[i].y + trails[i].height < 0)
-        trails[i].active=false;
+        trails[i].active = false;
     }
   }
 }
@@ -261,6 +298,7 @@ void updateTrails(){
 // ======================================================
 // ====================== DRAW ==========================
 // ======================================================
+
 void drawHome(){
   u8g2.clearBuffer();
 
@@ -271,20 +309,20 @@ void drawHome(){
   u8g2.setCursor(6,56); u8g2.print(getKPS(),1);
 
   if (millis() - encIconTimer < 2000){
-    u8g2.setCursor(118,12);   // TOP-RIGHT
+    u8g2.setCursor(118,12);
     u8g2.print(encDir > 0 ? "+" : "-");
   }
 
-  for (int i=0;i<MAX_TRAILS;i++){
-    if (!trails[i].active) continue;
-    u8g2.drawBox(trails[i].x, trails[i].y - trails[i].height, 16, trails[i].height);
+  for (int i = 0; i < MAX_TRAILS; i++){
+    if (trails[i].active)
+      u8g2.drawBox(trails[i].x, trails[i].y - trails[i].height, 16, trails[i].height);
   }
 
   const char* labels[4] = { "A", "S", "L", ";" };
-  for (int i=0;i<4;i++){
-    int bx = 48 + i*20;
+  for (int i = 0; i < 4; i++){
+    int bx = 48 + i * 20;
     u8g2.drawFrame(bx,48,16,16);
-    u8g2.setCursor(bx+5,60);
+    u8g2.setCursor(bx + 5, 60);
     u8g2.print(labels[i]);
   }
 
@@ -294,8 +332,9 @@ void drawHome(){
 // ======================================================
 // ====================== SETUP =========================
 // ======================================================
+
 void setup(){
-  for (int i=0;i<4;i++) pinMode(BTN_PINS[i], INPUT_PULLUP);
+  for (int i = 0; i < 4; i++) pinMode(BTN_PINS[i], INPUT_PULLUP);
   pinMode(ENC_A, INPUT_PULLUP);
   pinMode(ENC_B, INPUT_PULLUP);
   pinMode(ENC_SW, INPUT_PULLUP);
@@ -315,6 +354,7 @@ void setup(){
 // ======================================================
 // ======================= LOOP =========================
 // ======================================================
+
 void loop(){
   if (uiState == UI_SPLASH){
     drawSplash();
