@@ -1198,14 +1198,14 @@ void loop() {
       return; 
     }
   }
-    readInputs();
+  if (millis() - lastMirrorFrame < 500) {
+    return;
+  }
+  readInputs();
   handleStateMachine();
   updateRGB(); 
   updateStatusLED();
   updateHID();
-  if (millis() - lastMirrorFrame < 500) {
-    return;
-  }
 
 
   if (uiState == UI_SPLASH) {
