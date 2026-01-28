@@ -1054,6 +1054,14 @@ void drawRemap() {
   u8g2.setCursor(10, 15);
   if (uiState == UI_REMAP_WAIT_PRESS) {
     u8g2.print("Press key to remap"); // Text Changed
+    // --- ADD THIS SECTION TO SHOW CURRENT KEYS ---
+    u8g2.drawHLine(0, 48, 128); // Optional separator line
+    for(int i=0; i<4; i++) {
+      int x = 10 + (i * 30); // Spacing for 4 keys
+      u8g2.setCursor(x, 60);
+      u8g2.print(getLabel(config.keyMapping[i])); 
+    }
+    // ----------------------------------------------
   } else {
     u8g2.print("Select Key:");
     u8g2.setFont(u8g2_font_ncenB14_tr);

@@ -1,7 +1,6 @@
 # Vortex-MacroPad
-A code for my MacroPad
+A code for my MacroPad. 4 key keyboard with cusomization.
 
-# i still have to buy a components to assemble it (already ordered)
 Wiring Note:
 | XIAO RP2040 Pin | Connected Device | Signal / Function        |
 |-----------------|------------------|--------------------------|
