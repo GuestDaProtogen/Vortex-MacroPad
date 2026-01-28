@@ -842,7 +842,7 @@ void handleStateMachine() {
       break;
 
     case UI_SETTINGS_MAIN:
-      scroll(menuIndex, 0, 2, menuDir); 
+      scroll(menuIndex, 0, 2, -menuDir); 
       if (encClick) {
         encClick = false;
         if (menuIndex == 0) uiState = UI_REMAP_WAIT_PRESS;
