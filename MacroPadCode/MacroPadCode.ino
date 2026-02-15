@@ -12,6 +12,26 @@
 float currentCursorY = 20;
 int targetCursorY = 20;
 
+char trackTitle[80] = "No Media";
+char trackArtist[80] = "Disconnected";
+int leftViz = 0;
+int rightViz = 0;
+
+int currentVolume = 0; // 0-100
+int lastKnownVolume = -1;
+unsigned long lastVolChangeTime = 0;
+
+String mediaElapsed = "0:00";
+String mediaTotal = "0:00";
+
+int timeToSeconds(String t) {
+  int colon = t.indexOf(':');
+  if (colon == -1) return 0;
+  int m = t.substring(0, colon).toInt();
+  int s = t.substring(colon + 1).toInt();
+  return (m * 60) + s;
+}
+
 // 'F18', 32x32px
 const unsigned char epd_bitmap_F18 [] PROGMEM = {
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
@@ -360,6 +380,7 @@ const int frameCount = 28;
 // =================== CONFIGURATION ====================
 // ======================================================
 
+
 #define FLASH_SIGNATURE 0x45  // Increment to force reset for new features
 #define RGB_PIN 12            // Data Pin for RGB
 #define RGB_PWR_PIN 11        // Power Pin for RGB (Must be HIGH)
@@ -399,6 +420,7 @@ struct ConfigData {
   uint8_t rgbMode;            // 0=Cycle, 1=Custom, 2=Off
   uint8_t rgbR, rgbG, rgbB;   // Custom colors
   uint8_t brightness;         // Global Brightness (0-255)
+  uint8_t appMode; // UI Modes
 };
 
 ConfigData config;
@@ -407,6 +429,7 @@ enum UiState {
   UI_SPLASH,
   UI_HOME,
   UI_SETTINGS_MAIN,
+  UI_MODE_SELECT,
   UI_REMAP_WAIT_PRESS,
   UI_REMAP_SELECT_KEY,
   UI_RGB_MODE_SELECT,
@@ -453,6 +476,17 @@ unsigned long lastActivity = 0;
 int lastDirIcon = 0;
 unsigned long keyTimes[32];
 uint8_t keyTimeIdx = 0;
+
+// Modes
+enum AppMode { MODE_RHYTHM = 0, MODE_MEDIA = 1 };
+AppMode currentAppMode = MODE_RHYTHM;
+#define ADDR_APP_MODE 50 // EEPROM address for mode storage
+
+// Media Data Variables
+char songTitle[20] = "No Media";
+char songArtist[20] = "Disconnected";
+int leftLevel = 0;  // 0-8 for visualization
+int rightLevel = 0; // 0-8 for visualization
 
 struct Trail {
   bool active;
@@ -570,6 +604,8 @@ void loadConfig() {
     config.brightness = 150;
     saveConfig();
   }
+  EEPROM.get(ADDR_APP_MODE, currentAppMode);
+  if(currentAppMode > 1) currentAppMode = MODE_RHYTHM;
 }
 
 // ======================================================
@@ -597,7 +633,6 @@ void updateHID() {
   if (!usb_hid.ready()) return;
 
   // 1. Create a fresh, empty keyboard report
-  // Byte 0: Modifiers, Byte 1: Reserved, Bytes 2-7: Keycodes
   uint8_t current_kb_report[8] = {0, 0, 0, 0, 0, 0, 0, 0}; 
   uint16_t media_usage = 0;
   int kb_slot = 2; 
@@ -605,7 +640,20 @@ void updateHID() {
   // 2. Scan physical button states
   for(int i = 0; i < 4; i++) {
     if (btnState[i].pressed) {
-      uint8_t code = config.keyMapping[i];
+      uint8_t code;
+
+      // --- NEW MEDIA MODE OVERRIDE ---
+      // If we are in Media Mode (1) and on the Home Screen, force media behavior
+      if (config.appMode == 1 && uiState == UI_HOME) {
+        if (i == 0) media_usage = HID_USAGE_CONSUMER_SCAN_PREVIOUS_TRACK;
+        if (i == 1) media_usage = HID_USAGE_CONSUMER_PLAY_PAUSE;
+        if (i == 2) media_usage = HID_USAGE_CONSUMER_MUTE;
+        if (i == 3) media_usage = HID_USAGE_CONSUMER_SCAN_NEXT_TRACK;
+        continue; // Skip the standard mapping logic for this button
+      } 
+      
+      // --- STANDARD MAPPING LOGIC ---
+      code = config.keyMapping[i];
       
       // Separate Media Keys from Keyboard Keys
       if (code >= 0xF0) {
@@ -617,7 +665,7 @@ void updateHID() {
         if (code == KEY_MEDIA_MUTE)   media_usage = HID_USAGE_CONSUMER_MUTE;
       } 
       else {
-        // Standard Key: Place in the next available HID slot (up to 6 keys total)
+        // Standard Key
         if (kb_slot < 8) {
           current_kb_report[kb_slot] = code;
           kb_slot++;
@@ -627,7 +675,6 @@ void updateHID() {
   }
 
   // 3. Compare with the LAST sent report to prevent USB flooding
-  // Only send if the state has actually changed
   static uint8_t last_kb_report[8] = {0};
   if (memcmp(current_kb_report, last_kb_report, 8) != 0) {
     usb_hid.sendReport(1, current_kb_report, 8);
@@ -804,52 +851,31 @@ void handleStateMachine() {
         usb_hid.sendReport(2, &z, 2);
         encClick = false;
       }
-      
-      // // STRICT STATE SYNC (Anti-Ghosting Fix)
-      // if (usb_hid.ready()) {
-      //   uint8_t current_kb_report[8] = {0, 0, 0, 0, 0, 0, 0, 0}; 
-      //   uint16_t media_usage = 0;
-      //   int kb_slot = 2; 
-
-      //   for(int i = 0; i < 4; i++) {
-      //     if (btnState[i].pressed) {
-      //       uint8_t code = config.keyMapping[i];
-      //       if (code >= 0xF0) { // Media Keys
-      //         if (code == KEY_MEDIA_PLAY)   media_usage = HID_USAGE_CONSUMER_PLAY_PAUSE;
-      //         if (code == KEY_MEDIA_NEXT)   media_usage = HID_USAGE_CONSUMER_SCAN_NEXT_TRACK;
-      //         if (code == KEY_MEDIA_PREV)   media_usage = HID_USAGE_CONSUMER_SCAN_PREVIOUS_TRACK;
-      //         if (code == KEY_MEDIA_VOL_UP) media_usage = HID_USAGE_CONSUMER_VOLUME_INCREMENT;
-      //         if (code == KEY_MEDIA_VOL_DN) media_usage = HID_USAGE_CONSUMER_VOLUME_DECREMENT;
-      //         if (code == KEY_MEDIA_MUTE)   media_usage = HID_USAGE_CONSUMER_MUTE;
-      //       } else if (kb_slot < 8) { // Standard Keys
-      //         current_kb_report[kb_slot++] = code;
-      //       }
-      //     }
-      //   }
-
-      //   static uint8_t last_kb_report[8] = {0};
-      //   if (memcmp(current_kb_report, last_kb_report, 8) != 0) {
-      //     usb_hid.sendReport(1, current_kb_report, 8);
-      //     memcpy(last_kb_report, current_kb_report, 8);
-      //   }
-        
-      //   static uint16_t last_media_usage = 0;
-      //   if (media_usage != last_media_usage) {
-      //     usb_hid.sendReport(2, &media_usage, 2);
-      //     last_media_usage = media_usage;
-      //   }
-      // }
       break;
 
-    case UI_SETTINGS_MAIN:
-      scroll(menuIndex, 0, 2, -menuDir); 
+    case UI_MODE_SELECT:
+      scroll(menuIndex, 0, 1, menuDir);
       if (encClick) {
         encClick = false;
-        if (menuIndex == 0) uiState = UI_REMAP_WAIT_PRESS;
-        else if (menuIndex == 1) { uiState = UI_RGB_MODE_SELECT; menuIndex = config.rgbMode; }
-        else if (menuIndex == 2) uiState = UI_BRIGHTNESS;
+        config.appMode = menuIndex;
+        saveConfig();
+        uiState = UI_SETTINGS_MAIN;
+        menuIndex = 0; // Reset for settings menu
       }
       break;
+
+  case UI_SETTINGS_MAIN:
+    scroll(menuIndex, 0, 3, -menuDir); // Index 0 to 3
+    if (encClick) {
+      encClick = false;
+      if (menuIndex == 0) { uiState = UI_MODE_SELECT; menuIndex = config.appMode; }
+      else if (menuIndex == 1) { uiState = UI_REMAP_WAIT_PRESS; }
+      else if (menuIndex == 2) { uiState = UI_RGB_MODE_SELECT; menuIndex = config.rgbMode; }
+      else if (menuIndex == 3) { uiState = UI_BRIGHTNESS; }
+    }
+    break;
+
+
 
     case UI_REMAP_WAIT_PRESS:
       for(int i=0; i<4; i++) {
@@ -993,37 +1019,70 @@ void drawHome() {
   }
 }
 
+void drawMediaMode() {
+  u8g2.setFont(u8g2_font_5x7_tr);
+  
+  // Draw Curved Visualizers (Head unit style)
+  for(int i=0; i<leftLevel; i++) {
+    u8g2.drawRFrame(2, 45 - (i*5), 8, 3, 1); // Left stack
+  }
+  for(int i=0; i<rightLevel; i++) {
+    u8g2.drawRFrame(118, 45 - (i*5), 8, 3, 1); // Right stack
+  }
+
+  // Song Info
+  u8g2.setFont(u8g2_font_7x14_tr);
+  u8g2.drawStr(20, 15, songTitle);
+  u8g2.setFont(u8g2_font_5x7_tr);
+  u8g2.drawStr(20, 28, songArtist);
+
+  // Bottom Button Labels (Prev | Play/Pause | Mute | Next)
+  u8g2.drawHLine(0, 52, 128);
+  u8g2.drawStr(5, 62, "PRV");
+  u8g2.drawStr(40, 62, "P/P");
+  u8g2.drawStr(75, 62, "MUTE");
+  u8g2.drawStr(105, 62, "NXT");
+}
+
 float smoothMenuY = 26.0; // Starting position for the settings cursor
 
 void drawSettings() {
-  u8g2.setFont(u8g2_font_profont12_tf);
-  
-  // 1. Draw your original Header and Logo [cite: 480, 503]
+  u8g2.setFont(u8g2_font_profont12_tf); // CRITICAL: Reset font to text
   drawBitmap(0, 0, epd_bitmap_vortex_no_text); 
   u8g2.setCursor(30, 15); 
   u8g2.print("SETTINGS");
   u8g2.drawHLine(0, 22, 128);
 
-  int yStart = 35;
-  const char* items[] = {"Remap Buttons", "RGB Settings", "Brightness"};
-  
-  // 2. Draw all menu text first 
+
+  const char* items[] = {"Mode Select", "Remap Keys", "RGB Setup", "Brightness"};
+  int total = 4;
+  int visible = 3;
+  int yStart = 32; // Adjusted to align with header line
+  // Calculate which item is at the top of the screen
+  int top = (menuIndex >= visible) ? (menuIndex - (visible - 1)) : 0;
+
+  // 2. Draw Menu Text (Always in Draw Color 1)
   u8g2.setDrawColor(1);
-  for(int i=0; i<3; i++) {
-    u8g2.setCursor(5, yStart + (i*12));
-    u8g2.print(items[i]);
+  for (int i = 0; i < visible; i++) {
+    int idx = i + top;
+    if (idx < total) {
+      u8g2.setCursor(10, yStart + (i * 12));
+      u8g2.print(items[idx]);
+    }
   }
 
-  // 3. Animation Logic: Move smoothMenuY toward the target index 
-  float targetY = yStart + (menuIndex * 12) - 9;
-  // This line creates the "smooth" slide (adjust 0.2 for speed)
-  smoothMenuY += (targetY - smoothMenuY) * 0.2; 
+  // 3. Animation Logic
+  // Calculate target Y based on relative position (menuIndex - top)
+  float targetY = yStart + ((menuIndex - top) * 12) - 9;
+  
+  // Smoothly move the global smoothMenuY toward targetY
+  smoothMenuY += (targetY - smoothMenuY) * 0.25; 
 
-  // 4. Draw the sliding box using XOR mode (Draw Color 2)
-  // This automatically makes text black when the box is over it
+  // 4. Draw Sliding XOR Box
+  // This makes the text "flip" colors when the box slides over it
   u8g2.setDrawColor(2); 
-  u8g2.drawBox(0, (int)smoothMenuY, 100, 11);
-  u8g2.setDrawColor(1); // Reset to default
+  u8g2.drawBox(0, (int)smoothMenuY, 128, 11);
+  u8g2.setDrawColor(1); // Reset draw color to normal
 }
 
 bool mirroringMode = false;
@@ -1048,6 +1107,160 @@ void handleMirroring() {
     encClick = false;
   }
 }
+
+void drawModeSelect() {
+  u8g2.setFont(u8g2_font_profont12_tf);
+  u8g2.drawStr(5, 12, "SELECT MODE");
+  u8g2.drawHLine(0, 15, 128);
+
+  const char* modes[] = {"Rhythm", "Media Control"};
+  for (int i = 0; i < 2; i++) {
+    u8g2.setCursor(15, 32 + (i * 15));
+    if (menuIndex == i) u8g2.print("> ");
+    u8g2.print(modes[i]);
+  }
+}
+
+
+void drawVolumeOverlay() {
+  // 1. Set font to 2x (16px tall). 
+  // If this is still too big, use 1x (8px tall)
+  u8g2.setFont(u8g2_font_open_iconic_play_2x_t); 
+  
+  // 2. Assign the correct icon based on your requirement
+  int iconChar;
+  if (currentVolume > 66) {
+    iconChar = 0x4F; // Stage 1: Loud
+  } else if (currentVolume > 33) {
+    iconChar = 0x50; // Stage 2: Mid
+  } else {
+    iconChar = 0x51; // Stage 3: Low/Mute
+  }
+
+  // 3. Draw Icon (Centered X=56, Y=30)
+  u8g2.drawGlyph(56, 30, iconChar);
+
+  // 4. Draw Volume Text below it
+  u8g2.setFont(u8g2_font_profont12_tf);
+  
+  char volStr[20];
+  sprintf(volStr, "Volume: %d%%", currentVolume);
+  
+  int strWidth = u8g2.getStrWidth(volStr);
+  int xPos = (128 - strWidth) / 2; // Center the text string
+  
+  // Place text at Y=50 (20 pixels below the icon)
+  u8g2.setCursor(xPos, 40);
+  u8g2.print(volStr);
+}
+
+int titleScrollX = 0;
+unsigned long lastScrollTime = 0;
+const int scrollSpeed = 30;   // lower = faster (ms per step)
+const int textAreaWidth = 80; // reduce width by 4px total (2px each side)
+
+
+void drawMediaHome() {
+  u8g2.setDrawColor(1);
+
+  // 1. Far-Edge Visualizers
+  for (int i = 0; i < 8; i++) {
+    int y = 40 - (i * 5);
+    int curve = abs(4 - i);
+    if (i < leftViz)  u8g2.drawBox(2 + curve, y, 5, 3);
+    if (i < rightViz) u8g2.drawBox(121 - curve, y, 5, 3);
+  }
+
+  // 2. Icon Labels (Bottom)
+  u8g2.setFont(u8g2_font_open_iconic_play_1x_t);
+  u8g2.drawGlyph(15, 64, 0x0049);
+  u8g2.drawGlyph(47, 64, 0x0045);
+  u8g2.drawGlyph(78, 64, 0x004F);
+  u8g2.drawGlyph(108, 64, 0x004A);
+
+  // Volume Popup
+  if (millis() - lastVolChangeTime < 1000) {
+    drawVolumeOverlay();
+    return;
+  }
+
+  // ===============================
+  // 3. TRACK TITLE (CLIPPED SCROLL)
+  // ===============================
+  u8g2.setFont(u8g2_font_profont12_tf);
+
+  const int LEFT_BOUND  = 18;
+  const int RIGHT_BOUND = 110;
+  const int TEXT_WIDTH  = RIGHT_BOUND - LEFT_BOUND;
+
+  int textWidth = u8g2.getStrWidth(trackTitle);
+  int textY_Title = 15;
+
+  // Enable clipping region
+  u8g2.setClipWindow(LEFT_BOUND, 0, RIGHT_BOUND, 20);
+
+  if (textWidth > TEXT_WIDTH) {
+
+    if (millis() - lastScrollTime > scrollSpeed) {
+      titleScrollX--;
+      if (titleScrollX < -textWidth)
+        titleScrollX = TEXT_WIDTH;
+      lastScrollTime = millis();
+    }
+
+    u8g2.drawStr(LEFT_BOUND + titleScrollX, textY_Title, trackTitle);
+
+  } else {
+    int centeredX = LEFT_BOUND + (TEXT_WIDTH - textWidth) / 2;
+    u8g2.drawStr(centeredX, textY_Title, trackTitle);
+    titleScrollX = 0;
+  }
+
+  // Disable clipping
+  u8g2.setMaxClipWindow();
+
+
+  // ===============================
+  // 4. ARTIST
+  // ===============================
+  u8g2.setFont(u8g2_font_4x6_tr);
+  int artistWidth = u8g2.getStrWidth(trackArtist);
+  u8g2.drawStr(64 - (artistWidth / 2), 25, trackArtist);
+
+  // ===============================
+  // 5. PROGRESS BAR + TIMES
+  // ===============================
+  int curSec = timeToSeconds(mediaElapsed);
+  int totSec = timeToSeconds(mediaTotal);
+  float progress = (totSec > 0) ? (float)curSec / (float)totSec : 0.0;
+  if (progress > 1.0) progress = 1.0;
+
+  int totWidth = u8g2.getStrWidth(mediaTotal.c_str());
+  int elapsedWidth = u8g2.getStrWidth(mediaElapsed.c_str());
+
+  int barX = elapsedWidth + 4;
+  int barW_Total = (128 - totWidth) - barX - 4;
+  int barH = 6;
+  int barY = 32;
+
+  int textY_Time = barY + barH + 8;
+
+  u8g2.setCursor(barX, textY_Time);
+  u8g2.print(mediaElapsed);
+
+  u8g2.setCursor(barX + barW_Total - totWidth, textY_Time);
+  u8g2.print(mediaTotal);
+
+  u8g2.drawFrame(barX, barY, barW_Total, barH);
+
+  if (barW_Total > 2) {
+    int fillW = (int)((barW_Total - 4) * progress);
+    if (fillW > 0) {
+      u8g2.drawBox(barX + 2, barY + 2, fillW, barH - 4);
+    }
+  }
+}
+
 
 void drawRemap() {
   u8g2.setFont(u8g2_font_profont12_tf);
@@ -1172,59 +1385,114 @@ void setup() {
   rgb.setBrightness(config.brightness);
   
   setupHID();
-
   u8g2.begin();
+  lastKnownVolume = currentVolume;
 }
 
 unsigned long lastMirrorFrame = 0; // Track when we last got a frame
 const int mirrorTimeout = 500;    // How long to stay in mirror mode (ms)
 
 void loop() {
-// Check for the start of a frame
+  // 1. Check for incoming Serial Data
   if (Serial.available() > 0) {
-    if (Serial.read() == 0x02) { 
-      uint8_t buffer[1024];
+    
+    // Peek to see if it is an Image (0x02) or Text
+    int firstByte = Serial.peek();
+
+    if (firstByte == 0x02) {
+      // --- IMAGE MODE (Mirroring) ---
+      Serial.read(); // Consume the 0x02 header
       
-      // Give the serial port 50ms to finish receiving the image
+      uint8_t buffer[1024];
       Serial.setTimeout(50); 
       size_t readCount = Serial.readBytes(buffer, 1024);
       
-      // Only draw and ACK if we got the WHOLE image
       if (readCount == 1024) {
         u8g2.clearBuffer();
-        u8g2.drawBitmap(0, 0, 16, 64, buffer); 
+        u8g2.drawBitmap(0, 0, 16, 64, buffer); // Draw the bitmap
         u8g2.sendBuffer();
         
-        // Tell Python we are ready for the next one
-        Serial.write(0x06); 
-        lastMirrorFrame = millis();
+        Serial.write(0x06); // ACK
+        lastMirrorFrame = millis(); // Mark time so local UI doesn't overwrite immediately
       } else {
-        // We got a partial frame, tell Python to try again anyway
-        // This prevents the script from hanging forever
-        Serial.write(0x06); 
+        Serial.write(0x06); // ACK anyway to keep stream moving
       }
-      return; 
+      return; // Stop here, don't draw local UI this cycle
+    } 
+    else {
+      // --- TEXT MODE (Metadata) ---
+      String command = Serial.readStringUntil('\n');
+      command.trim(); // Important: Removes \r or extra spaces
+
+      if (command == "IDENTIFY") {
+        Serial.println("MACROPAD_STATION");
+      } 
+      else if (command.startsWith("MET:")) {
+        command.remove(0, 4); // Remove "MET:"
+        
+        int p1 = command.indexOf('|');
+        int p2 = command.indexOf('|', p1 + 1);
+        int p3 = command.indexOf('|', p2 + 1);
+        int p4 = command.indexOf('|', p3 + 1);
+        int p5 = command.indexOf('|', p4 + 1);
+        int p6 = command.indexOf('|', p5 + 1);
+
+        if (p6 != -1) {
+          // Parse Strings
+          String t = command.substring(0, p1);
+          String a = command.substring(p1 + 1, p2);
+          
+          t.toCharArray(trackTitle, sizeof(trackTitle));
+          a.toCharArray(trackArtist, sizeof(trackArtist));
+
+          
+          // Parse Visuals
+          leftViz = command.substring(p2 + 1, p3).toInt();
+          rightViz = command.substring(p3 + 1, p4).toInt();
+          
+          // Parse Volume
+          int newVol = command.substring(p4 + 1, p5).toInt();
+          
+          if (newVol != lastKnownVolume) {
+            lastVolChangeTime = millis();
+            lastKnownVolume = newVol;
+          }
+          currentVolume = newVol;
+
+          // Parse Times
+          mediaElapsed = command.substring(p5 + 1, p6);
+          mediaTotal = command.substring(p6 + 1);
+        }
+      }
     }
-  }
+  } // End of Serial Check
+
+  // 2. Local UI Logic
+  // If we recently received a mirror frame (last 500ms), don't draw local UI
   if (millis() - lastMirrorFrame < 500) {
     return;
   }
+
   readInputs();
   handleStateMachine();
   updateRGB(); 
   updateStatusLED();
   updateHID();
 
-
+  // Draw Splash if active
   if (uiState == UI_SPLASH) {
     drawSplash();
     return;
   }
 
+  // Draw Main UI
   u8g2.clearBuffer();
   
   switch(uiState) {
-    case UI_HOME:            drawHome(); break;
+    case UI_HOME:            
+      if (config.appMode == 1) drawMediaHome(); // Show Media UI
+      else drawHome();                          // Show Rhythm UI
+      break;
     case UI_SETTINGS_MAIN:   drawSettings(); break;
     case UI_REMAP_WAIT_PRESS:
     case UI_REMAP_SELECT_KEY:drawRemap(); break;
@@ -1240,7 +1508,9 @@ void loop() {
     case UI_RGB_CUSTOM_MENU:
     case UI_RGB_CUSTOM_EDIT: drawRGBCustom(); break;
     case UI_BRIGHTNESS:      drawBrightness(); break;
+    case UI_MODE_SELECT:     drawModeSelect(); break; 
   }
   
   u8g2.sendBuffer();
-}
+
+} // <--- CORRECT End of loop()
