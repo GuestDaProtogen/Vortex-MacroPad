@@ -1463,6 +1463,27 @@ void loop() {
           mediaElapsed = command.substring(p5 + 1, p6);
           mediaTotal = command.substring(p6 + 1);
         }
+      else if (command.startsWith("CFG:")) {
+        command.remove(0, 4); // Remove "CFG:"
+        int p[9];
+        p[0] = command.indexOf('|');
+        for(int i=1; i<9; i++) {
+          p[i] = command.indexOf('|', p[i-1] + 1);
+        }
+        
+        config.appMode = command.substring(0, p[0]).toInt();
+        config.keyMapping[0] = command.substring(p[0]+1, p[1]).toInt();
+        config.keyMapping[1] = command.substring(p[1]+1, p[2]).toInt();
+        config.keyMapping[2] = command.substring(p[2]+1, p[3]).toInt();
+        config.keyMapping[3] = command.substring(p[3]+1, p[4]).toInt();
+        config.rgbMode = command.substring(p[4]+1, p[5]).toInt();
+        config.rgbR = command.substring(p[5]+1, p[6]).toInt();
+        config.rgbG = command.substring(p[6]+1, p[7]).toInt();
+        config.rgbB = command.substring(p[7]+1, p[8]).toInt();
+        config.brightness = command.substring(p[8]+1).toInt();
+        
+        saveConfig();
+        updateRGB();
       }
     }
   } // End of Serial Check
@@ -1513,4 +1534,4 @@ void loop() {
   
   u8g2.sendBuffer();
 
-} // <--- CORRECT End of loop()
+}
